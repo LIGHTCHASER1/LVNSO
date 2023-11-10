@@ -38,6 +38,9 @@ info_dict = {
     'f21':['shekel1',0.0,10.0,'[4,4,4,4]','-3.32',3],
     'f22':['shekel2',0.0,10.0,'[4,4,4,4]','-3.32',3],
     'f23':['shekel3',0.0,10.0,'[4,4,4,4]','-3.32',3],
+    
+    'bbf1':['bbfsphere',-50,50,'[0,0,..,0]','0'],
+    
     'F01':['F01', -1.0, 1.0, '[±0.707, ±0.707, 0,...,0]','0'],
     'F02':['F02', -1.0, 1.0, '11 roots', '0', 2]
     }
@@ -172,6 +175,9 @@ class get_function(object):
             return bf.shekel2(X)
         if self.name == 'f23':
             return bf.shekel3(X)
+        
+        if self.name == 'bbf1':
+            return bf.bbfsphere(X)
         
         if self.name == 'F01':
             return bf.F01(X)

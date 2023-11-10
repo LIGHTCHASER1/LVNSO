@@ -26,12 +26,13 @@ import matplotlib.pyplot as plt
 from functools import reduce
 from RBFN import RBFN
 import rbfn_all as rbf
-
+import networks as nw
 import hurbf as hrbf
 
 torch.autograd.set_detect_anomaly = True
 
 import cfg as c
+
 class PSOL(object):
     def __init__(self,cfg):
         self.narvs = cfg.narvs
@@ -81,7 +82,7 @@ class PSOL(object):
         self.train_x_tensor = torch.from_numpy(train_x).float().to(device)
         self.y_tensor1 = self.y_aim*torch.ones(self.lstm_particle_size).to(device)
         
-        self.lstm_model = cfg.network(self.input_features_num,self.hidden_size,self.output_features_num,self.dropout).to(device)
+        self.lstm_model = nw.LinearLSTM(self.input_features_num,self.hidden_size,self.output_features_num,self.dropout).to(device)
         self.optimizer = torch.optim.Adam(self.lstm_model.parameters(),lr=self.lr)
         self.scheduler = StepLR(self.optimizer, step_size = self.step_size, gamma = self.step_gamma)
         self.Loss = nn.MSELoss()
@@ -137,7 +138,7 @@ class PSOL(object):
             # else:
             #     output =self.lstm_model((fx_tensor_out).detach().reshape(-1,self.batch_size,self.input_features_num)).view(-1,self.output_features_num)
             
-            output =self.lstm_model(self.train_x_tensor.clone()).view(-1,self.output_features_num) 
+            output =self.lstm_model(self.train_x_tensor.clone()).view(-1,self.output_features_num) .clone()
             
             if self.epsilon_bool == True:
                 self.epsilon = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * \
@@ -246,7 +247,7 @@ class PSOL(object):
             self.random_y = gf.calculate(multi_xbest)
         lost = []
         for epoch in range(0,self.max_epochs):
-            output =self.lstm_model(self.train_x_tensor.clone()).view(-1,self.output_features_num) 
+            output =self.lstm_model(self.train_x_tensor.clone()).view(-1,self.output_features_num).clone()
             if self.epsilon_bool == True:
                 self.epsilon = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * \
                     np.ma.exp(-1. * epoch / self.epsilon_decay)
@@ -331,6 +332,132 @@ class PSOL(object):
         plt.show()
         return np.append(multi_xbest,f_best)
     
+    def SurrogateGradient_PSOL_Optimizer(self,center):
+        import test_functions as tfu
+        gf = tfu.get_function(self.function_name,tfu.info_dict)
+        minx = gf.min_x
+        maxx = gf.max_x
+        self.vmax = self.vmax_eta * (self.max_x-self.min_x)
+        if self.randomfind == True:
+            xs = minx+(maxx-minx)*np.random.rand(self.random_particle_size,self.narvs)
+            #print(x_best)
+            xs = torch.from_numpy(xs).float()
+            y = gf.calculate(xs)
+            #print(y)
+            a = torch.argmin(y)
+            x_best = xs[a,:].to(device)
+            self.random_x_best = x_best
+            self.random_y = torch.min(y)
+            print('random search completed')
+            #print(x_best)
+        else:
+            x_best = center
+            self.random_y = gf.calculate(x_best)
+        lost = []
+        # x_1 为上一时刻的位移
+        # x_1 = self.lstm_model(self.train_x_tensor.clone()).view(-1,self.output_features_num) 
+        for epoch in range(0,self.max_epochs):
+            # if epoch == 0:
+            #     output =self.lstm_model(self.train_x_tensor.clone()).view(-1,self.output_features_num) 
+            # else:
+            #     output =self.lstm_model((fx_tensor_out).detach().reshape(-1,self.batch_size,self.input_features_num)).view(-1,self.output_features_num)
+            
+            output =self.lstm_model(self.train_x_tensor.clone()).view(-1,self.output_features_num) .clone()
+            
+            if self.epsilon_bool == True:
+                self.epsilon = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * \
+                    np.ma.exp(-1. * epoch / self.epsilon_decay)
+                #output = output/self.epsilon
+                if epoch < self.globalsearch_phi * self.max_epochs and self.randomvbool:
+                    for i in range(output.shape[0]):
+                        r = np.random.uniform(0,1)
+                        if r <= self.change_opt:
+                            for k in range(0,self.change_num):
+                                j = int(np.random.choice(np.linspace(0,self.output_features_num-1,self.output_features_num)))
+                                #output[i] = torch.from_numpy(np.random.uniform(-self.vmax/self.epsilon,self.vmax/self.epsilon,self.output_features_num)).float().to(device)
+                                output[i][j] = (np.random.uniform(-self.vmax/self.epsilon,self.vmax/self.epsilon))
+            if epoch > 0.1*self.max_epochs and self.circlebool == True and center == None:
+                import time
+                time.sleep(1)
+                print('Begin resetting the net......')
+                conf = c.config()
+                cfg1 = c.revise_cfg(conf,self.function_name)
+                cfg1.randomfind,cfg1.PSO_bool,cfg1.circlebool,cfg1.randomvbool = False,False,False,False
+                psol = PSOL(cfg1)
+                return psol.PSOL_Optimizer(x_best)
+            m1x = self.min_x-x_best.detach()
+            m2x = self.max_x-x_best.detach()
+            # print(output.shape)
+            # print(m1x.shape)
+            output = torch.clamp(output,min=m1x,max=m2x)
+            # 加leader
+            x_new = output+x_best.detach()
+            if self.rbfbool == False:
+                fx_tensor_out = gf.calculate(x_new)
+            else:
+                fx_tensor_out = self.rbfn(x_new)
+            
+            # 加最初位移
+            # fx_tensor_out = gf.calculate(output+self.train_x_tensor.clone().view(-1,self.output_features_num))
+            # 加上一时刻位移
+            # fx_tensor_out = gf.calculate(output+x_1)
+            # x_1 = output + x_1
+            a = torch.argmin(fx_tensor_out)
+            if gf.calculate(output[a,:]+x_best) < gf.calculate(x_best):
+                x_best = output[a,:] + x_best
+            self.optimizer.zero_grad()
+            
+            loss = torch.sqrt(self.Loss(fx_tensor_out,self.y_tensor1))
+            # 原算法  
+            #loss = torch.sum(torch.sqrt(Loss(output,output[a,:])))
+            #print(loss)
+            #loss = Loss(fx_tensor_out,self.y_tensor1)
+            #print(loss)
+            #loss.backward(retain_graph=True)
+            
+            #print(loss)
+            sigma = 0.1
+            beta = 1.0
+            n = 1000
+            scale = sigma / np.sqrt(n)
+            epsilons = scale * torch.randn(n, 1)
+            f_pos = torch.sqrt(self.Loss(fx_tensor_out + epsilons,self.y_tensor1))
+            f_neg = torch.sqrt(self.Loss(fx_tensor_out - epsilons,self.y_tensor1))
+            loss.grad = (beta / (2 * sigma ** 2)) * (f_pos - f_neg).mm(epsilons)
+            loss.backward(retain_graph=True)
+            
+            self.optimizer.step()
+            if self.step_bool:
+                self.scheduler.step()
+            
+            lost.append(loss.cpu().data.numpy())
+            
+            if (epoch+1) % 50 == 0:
+                if self.print_bool:
+                    print('Epoch: [{}/{}], Loss:{:.8f}'.format(epoch+1, self.max_epochs, loss.item()))
+                    if self.printx_bool:
+                        print((x_best).cpu().data.numpy())
+                    print(gf.calculate(x_best).cpu().data.numpy())
+            
+            if epoch == self.max_epochs - 1:
+                f_best = gf.calculate(x_best).cpu().data.numpy()
+                #print((output+x_best).cpu().data.numpy())
+                x_best = (x_best).cpu().data.numpy()
+                if self.print_bool2:
+                    # print('随机算法最优解为：{}'.format(self.random_x_best))
+                    # print('随机算法最优值为：{}'.format(self.random_y))
+                    # if self.bool1 == 'min':
+                    #     eta = (self.random_y.cpu().data.numpy()-f_best)/np.abs(self.random_y.cpu().data.numpy())
+                    #     print('优化比例为：{}'.format(eta))
+                    print('最优解为：{}'.format(x_best))
+                    print('最优值为：{}'.format(f_best))
+            
+        x = np.arange(self.max_epochs)
+        plt.plot(x,lost)
+        plt.show()
+        return np.append(x_best,f_best)
+    
+    
     
     
     def PSOL_Optimizer_Epochs(self,cfg):
@@ -367,6 +494,7 @@ class PSOL(object):
         print('迭代解在范围内的概率为：{}'.format(times_rational.shape[0]/self.particle_size))
         plt.show()
         return times_rational[:,-1]
+    
 
 def test(func_name,epochsbool):
     conf = c.config()
@@ -379,10 +507,11 @@ def test(func_name,epochsbool):
         return test_array
     else:
         print(psol.function_name)
-        # psol.PSOL_Optimizer(None)
-        psol.MultiRoot_PSOL_Optimizer(None)
+        psol.PSOL_Optimizer(None)
+        # psol.MultiRoot_PSOL_Optimizer(None)
+        #psol.SurrogateGradient_PSOL_Optimizer(None)
 
 
 if __name__ == '__main__':
-    test('F02',False)
+    test('bbf1',False)
     #test('f9',False)

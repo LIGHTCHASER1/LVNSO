@@ -30,6 +30,12 @@ def ufunc(x,a,k,m):
 def sphere(X):
     f1 = torch.sum(X**2,dim=-1)
     return f1
+
+def bbfsphere(X):
+    # X is a tensor
+    x = x.cpu().data.numpy()
+    return torch.from_numpy(X**2).float().to(device)
+
 def schw222(X):
     f2 = torch.sum(torch.abs(X),dim=-1)+torch.prod(torch.abs(X),dim=-1)
     return f2

@@ -14,6 +14,7 @@ os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
 import torch
 import torch.nn as nn
+from torch.autograd import Function
 from torch.nn import LSTM, Linear, MSELoss, Parameter, Dropout, Module
 import random
 import math
@@ -138,4 +139,73 @@ class DoubleLinearReluLSTM(Module):
         x, _ = self.lstm(x)#_x is input, size (seq_len, batch, input_size)
         x = self.drop_out(x)
         x = self.output_linear(x)
+        return x
+
+def BlackBoxFunction(y_now, y_aim, function_name):
+    import test_functions as tfu
+    gf = tfu.get_function(function_name,tfu.info_dict)
+    y = gf.calculate(x_now)
+    return torch.sqrt(nn.MSELoss(y_now - y_aim))
+
+class get_BBF(object):
+    def __init__(self, y_aim, function_name):
+        self.y_aim = y_aim
+        self.function_name = function_name
+        import test_functions as tfu
+        self.gf = tfu.get_function(self.function_name,tfu.info_dict)
+        self.loss = nn.MSELoss()
+    def BlackBoxFunction(self, x_now):
+        y = self.gf.calculate(x_now)
+        return torch.sqrt(self.loss(y , self.y_aim))
+    
+import cfg as c 
+cfgs = c.config()
+gBBF = get_BBF(cfgs.y_aims, 'f8')
+ith_type = 'Vanilla ES'
+
+class SurrogateGradient4ObjFunc(Function):
+    
+    @staticmethod
+    def forward(ctx, x):
+        #result = gBBF.BlackBoxFunction(x)
+        #result = WhiteBoxFunction(x)
+        ctx.save_for_backward(x)
+        return x
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        #print(grad_output)
+        x = ctx.saved_tensors
+        #print("called")
+        if ith_type == 'Vanilla ES':
+            x_dim = x.shape[0]
+            sigma = 0.1
+            beta = 1.0
+            n = 1000
+            scale = sigma / np.sqrt(n)
+            epsilons = scale * torch.randn(n, 1)
+            f_pos = gBBF.BlackBoxFunction(x + epsilons.t())
+            f_neg = gBBF.BlackBoxFunction(x - epsilons.t())
+            
+            update = (beta / (2 * sigma ** 2)) * (f_pos - f_neg).mm(epsilons)
+            #print(update.shape)
+            #print(update[0])
+            return update[0] * grad_output
+        
+class SurrogateGradientLinearLSTM(Module):
+    def __init__(self, input_size,hidden_size,output_size,dropout_param):
+        super().__init__()
+        import cfg as c
+        import functional as f
+        cf1 = c.config()
+        
+        self.lstm = nn.LSTM(input_size,hidden_size,1)#单层LSTM效果较好，固定为1层
+        self.output_linear = nn.Linear(hidden_size,output_size)
+        #self.drop_out = Dropout(p=dropout_param)
+        
+    def forward(self, x):
+        x, _ = self.lstm(x)#_x is input, size (seq_len, batch, input_size)
+        #x = self.drop_out(x)
+        x = self.output_linear(x)
+        x = SurrogateGradient4ObjFunc.apply(x)
         return x

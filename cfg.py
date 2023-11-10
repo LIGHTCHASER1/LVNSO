@@ -5,8 +5,9 @@ Created on Tue Feb 21 21:49:52 2023
 @author: 14029
 """
 import torch
-import networks as nw
+#import networks as nw
 import os
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # ############################## 单峰函数 ##################################
 # 简单系统会使得算法精度不够。算法的精度不够时，同等倍增vmax_eta,epsilon_start/end
 # f1sphere:([200,500],200),max_epochs=6000
@@ -106,15 +107,15 @@ def basis_func_dict():
 class config(object):
     def __init__(self):
         #Lstm算法参数
-        self.narvs = 2
+        self.narvs = 20
         self.hidden_size = 24
         # self.layers_num = 1
         self.dropout = 0
         self.batch_size = 50
-        self.lstm_particle_size = 10000
+        self.lstm_particle_size = 1000
         self.max_epochs = 10000
         self.lr = 0.0005
-        self.network = nw.LinearLSTM
+        #self.network = nw.LinearLSTM
         #self.network = nw.LinearLSTM
         #总寻优次数
         self.particle_size = 30
@@ -134,12 +135,13 @@ class config(object):
         self.printx_bool = True
         #函数性质、寻优范围与目标
         self.y_aim = 0
+        self.y_aims = self.y_aim*torch.ones(self.lstm_particle_size).to(device)
         #LSTM粒子群初始化的范围，与原函数粒子群初始化范围无关
         self.min_x = -500
         self.max_x = 500
         
         #self.function_name = 8
-        self.function_name = 'F01'
+        self.function_name = 'f8'
         self.bool1 = 'min'
         #是否使用PSO算法进行初始中心点寻优
         self.PSO_bool = False
@@ -181,7 +183,7 @@ def revise_cfg(cfg1,function_name):
     
     if isinstance(function_name,str):
         num = int(''.join([x for x in function_name if x.isdigit()]))
-        if function_name[0] == 'f': 
+        if function_name[0] != 'F': 
             if num == 1:
                 cfg1.function_name,cfg1.epsilon_start,cfg1.epsilon_end,cfg1.vmax_eta = 'f1',200,500,20
             if num == 2:
