@@ -57,6 +57,10 @@ class PSOL(object):
         self.epsilon_decay = cfg.epsilon_decay
         self.epsilon_bool = cfg.epsilon_bool
         
+        self.multi_root_num = cfg.multi_root_num
+        self.multi_xbest_jumpbool = cfg.multi_xbest_jumpbool
+        self.group_num = int(cfg.lstm_particle_size / cfg.multi_root_num)
+        
         self.rbfbool = cfg.rbfbool
         self.input_dim = cfg.rbf_input_dim
         self.output_dim = cfg.rbf_output_dim
@@ -106,10 +110,10 @@ class PSOL(object):
     def PSOL_Optimizer(self,center):
         import test_functions as tfu
         gf = tfu.get_function(self.function_name,tfu.info_dict)
+        minx = gf.min_x
+        maxx = gf.max_x
         self.vmax = self.vmax_eta * (self.max_x-self.min_x)
         if self.randomfind == True:
-            minx = gf.min_x
-            maxx = gf.max_x
             xs = minx+(maxx-minx)*np.random.rand(self.random_particle_size,self.narvs)
             #print(x_best)
             xs = torch.from_numpy(xs).float()
@@ -217,6 +221,118 @@ class PSOL(object):
         plt.show()
         return np.append(x_best,f_best)
     
+    def MultiRoot_PSOL_Optimizer(self, center):
+        import test_functions as tfu
+        gf = tfu.get_function(self.function_name, tfu.info_dict)
+        self.vmax = self.vmax_eta * (self.max_x - self.min_x)
+        minx = gf.min_x
+        maxx = gf.max_x
+        if self.randomfind == True:
+            minx = gf.min_x
+            maxx = gf.max_x
+            '''
+            xs: (particle_size, narvs)
+            '''
+            xs = minx + (maxx - minx)*np.random.rand(self.random_particle_size, self.narvs)
+            xs = torch.from_numpy(xs).float()
+            y = gf.calculate(xs)
+            sorted_indices = torch.topk(y, self.multi_root_num, largest = False).indices
+            multi_xbest = xs[sorted_indices,:].to(device)
+            self.random_x_best = multi_xbest
+            self.random_y = y[sorted_indices]
+            print('random search completed')
+        else:
+            multi_xbest = center
+            self.random_y = gf.calculate(multi_xbest)
+        lost = []
+        for epoch in range(0,self.max_epochs):
+            output =self.lstm_model(self.train_x_tensor.clone()).view(-1,self.output_features_num) 
+            if self.epsilon_bool == True:
+                self.epsilon = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * \
+                    np.ma.exp(-1. * epoch / self.epsilon_decay)
+                #output = output/self.epsilon
+                if epoch < self.globalsearch_phi * self.max_epochs and self.randomvbool:
+                    for i in range(output.shape[0]):
+                        r = np.random.uniform(0,1)
+                        if r <= self.change_opt:
+                            for k in range(0,self.change_num):
+                                j = int(np.random.choice(np.linspace(0,self.output_features_num-1,self.output_features_num)))
+                                #output[i] = torch.from_numpy(np.random.uniform(-self.vmax/self.epsilon,self.vmax/self.epsilon,self.output_features_num)).float().to(device)
+                                output[i][j] = (np.random.uniform(-self.vmax/self.epsilon,self.vmax/self.epsilon))
+            if epoch > 0.1*self.max_epochs and self.circlebool == True and center == None:
+                import time
+                time.sleep(1)
+                print('Begin resetting the net......')
+                conf = c.config()
+                cfg1 = c.revise_cfg(conf,self.function_name)
+                cfg1.randomfind,cfg1.PSO_bool,cfg1.circlebool,cfg1.randomvbool = False,False,False,False
+                psol = PSOL(cfg1)
+                return psol.MultiRoot_PSOL_Optimizer(multi_xbest)  
+            #若共有1000个particle，假设20个根，那么每个组就有50个particle，分别寻优
+            #接下来作每个group的速度矩阵clamp限制
+            for i in range(self.multi_root_num):
+                m1x = minx - multi_xbest[i,:].detach()
+                m2x = maxx - multi_xbest[i,:].detach()
+                # 记得在操作前.clone()，避免原位操作！！！！！！！！！！！
+                output[int(i*self.group_num):int((i+1)*self.group_num), :] = torch.clamp(output[int(i*self.group_num):int((i+1)*self.group_num), :].clone(),min=m1x,max=m2x)
+
+            # multi leaders
+            # print(output.shape)
+            # loss = torch.sqrt(self.Loss(output,self.y_tensor1.unsqueeze(1).expand(-1,2)))
+            # with torch.autograd.detect_anomaly(True):
+            #     loss.backward(retain_graph=True)
+
+            if self.rbfbool == False:
+                multi_fx_tensor_out = gf.calculate(output+torch.tile(multi_xbest.detach(), (1, self.group_num)).reshape(-1,self.narvs).detach())
+            else:
+                multi_fx_tensor_out = self.rbfn(output+torch.tile(multi_xbest, (1, self.group_num)).reshape(-1,self.narvs).detach())
+            for i in range(self.multi_root_num):
+                #print(multi_fx_tensor_out.shape)
+                a = torch.argmin(multi_fx_tensor_out[int(i*self.group_num):int((i+1)*self.group_num)])
+                if gf.calculate(output[a,:]+multi_xbest[i,:]) < gf.calculate(multi_xbest[i,:]):
+                    if self.multi_xbest_jumpbool == False:
+                        multi_xbest[i,:] = output[a,:].detach() + multi_xbest[i,:].detach()
+                    else:
+                        mindis = tfu.min_generalized_dis(i,minx, maxx, multi_xbest)
+                        if mindis != False:
+                            newdis = torch.sqrt(torch.sum(output[a,:]**2))
+                            if newdis <= mindis:
+                                multi_xbest[i,:] = output[a,:].detach() + multi_xbest[i,:].detach()
+                            
+            self.optimizer.zero_grad()
+            loss = torch.sqrt(self.Loss(multi_fx_tensor_out,self.y_tensor1))
+            with torch.autograd.detect_anomaly(True):
+                loss.backward(retain_graph=True)
+            self.optimizer.step()
+            if self.step_bool:
+                self.scheduler.step()
+            lost.append(loss.cpu().data.numpy())
+            
+            if (epoch+1) % 50 == 0:
+                if self.print_bool:
+                    print('Epoch: [{}/{}], Loss:{:.8f}'.format(epoch+1, self.max_epochs, loss.item()))
+                    if self.printx_bool:
+                        print((multi_xbest).cpu().data.numpy())
+                    print(gf.calculate(multi_xbest).cpu().data.numpy())
+            if epoch == self.max_epochs - 1:
+                f_best = gf.calculate(multi_xbest).cpu().data.numpy()
+                #print((output+x_best).cpu().data.numpy())
+                multi_xbest = (multi_xbest).cpu().data.numpy()
+                if self.print_bool2:
+                    # print('随机算法最优解为：{}'.format(self.random_x_best))
+                    # print('随机算法最优值为：{}'.format(self.random_y))
+                    # if self.bool1 == 'min':
+                    #     eta = (self.random_y.cpu().data.numpy()-f_best)/np.abs(self.random_y.cpu().data.numpy())
+                    #     print('优化比例为：{}'.format(eta))
+                    print('最优解为：{}'.format(multi_xbest))
+                    print('最优值为：{}'.format(f_best))
+        x = np.arange(self.max_epochs)
+        plt.plot(x,lost)
+        plt.show()
+        return np.append(multi_xbest,f_best)
+    
+    
+    
     def PSOL_Optimizer_Epochs(self,cfg):
         times_rational = np.array([])
         for i in range(self.particle_size):
@@ -263,7 +379,8 @@ def test(func_name,epochsbool):
         return test_array
     else:
         print(psol.function_name)
-        psol.PSOL_Optimizer(None)
+        # psol.PSOL_Optimizer(None)
+        psol.MultiRoot_PSOL_Optimizer(None)
 
 
 if __name__ == '__main__':

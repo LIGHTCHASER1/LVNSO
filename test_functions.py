@@ -6,6 +6,7 @@ Created on Tue Feb 21 21:54:31 2023
 """
 # import cec2005real as cec05
 import numpy as np
+import random
 #from cec2013lsgo.cec2013 import Benchmark
 import cfg as c
 cfg = c.config()
@@ -40,6 +41,19 @@ info_dict = {
     'F01':['F01', -1.0, 1.0, '[±0.707, ±0.707, 0,...,0]','0'],
     'F02':['F02', -1.0, 1.0, '11 roots', '0', 2]
     }
+def min_generalized_dis(index, min_x, max_x, matrix):
+    ith = matrix[index]
+    part1 = matrix[:index]
+    part2 = matrix[index + 1:]
+    matrix = torch.cat((part1,part2), dim = 0)
+    dises = torch.sqrt(torch.sum((matrix - ith)**2,dim = 1))
+    min_dis = torch.min(dises) / (max_x - min_x)
+    prob = (np.e**(-min_dis)-1/np.e)
+    #prob = 1 - min_dis
+    random_num = random.random()
+    print(prob)
+    if random_num > prob: return min_dis
+    else: return False
 # import cec2019comp100digit as cec19
 class Functions(object):
     def __init__(self,name,min_x,max_x,opx,opf):

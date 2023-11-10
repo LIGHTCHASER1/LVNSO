@@ -111,7 +111,7 @@ class config(object):
         # self.layers_num = 1
         self.dropout = 0
         self.batch_size = 50
-        self.lstm_particle_size = 1000
+        self.lstm_particle_size = 10000
         self.max_epochs = 10000
         self.lr = 0.0005
         self.network = nw.LinearLSTM
@@ -163,6 +163,10 @@ class config(object):
         self.rbf_output_dim = 1
         self.num_rbfs = 100
         self.rbf_basis_func = gaussian
+        #如果是同时有多个解，事先假设有多少个，或是并行跑多少组
+        #该值必须能整除lstm_particle_size，寻优点会根据该值分组
+        self.multi_root_num = 20
+        self.multi_xbest_jumpbool = False
         
         #作图参数，用于展示效果
         self.pureplot = False

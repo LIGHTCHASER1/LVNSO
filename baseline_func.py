@@ -294,3 +294,20 @@ def F02(X):
         y2 = X[:,0] - X[:,1]
     return torch.sqrt(y1**2 + y2**2)
 
+def F03(X):
+    if len(X.shape) == 1:
+        y1 = X[0] - torch.cos(4*np.pi*X[1])
+        y2 = X[0]**2 + X[1]**2
+    else:
+        y1 = X[:,0] - torch.cos(4*np.pi*X[:,1])
+        y2 = X[:,0]**2 + X[:,1]**2
+    return torch.sqrt(y1**2 + y2**2)
+
+def F04(X):
+    if len(X.shape) == 1:
+        y1 = torch.cos(2*X[0]) - torch.cos(2*X[1]) - 0.4
+        y2 = 2*(X[1] - X[0]) + torch.sin(2*X[1]) - torch.sin(2*X[0]) - 1.2
+    else:
+        y1 = torch.cos(2*X[:,0]) - torch.cos(2*X[:,1]) - 0.4
+        y2 = 2*(X[1] - X[:,0]) + torch.sin(2*X[:,1]) - torch.sin(2*X[:,0]) - 1.2
+    return torch.sqrt(y1**2 + y2**2)
